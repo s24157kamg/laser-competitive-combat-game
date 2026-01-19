@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>Beam Duel - Neo Fantasia</title>
+<style>
+html,body{margin:0;padding:0;background:#000;overflow:hidden;font-family:sans-serif;color:#fff}
+canvas{display:block;margin:0 auto;background:#02040f}
+.btn{position:absolute;border:2px solid #9ff;border-radius:12px;color:#9ff;text-align:center;user-select:none}
+.small{font-size:12px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+function resize(){
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+}
+addEventListener("resize",resize);
+resize();
+
+// ---------------- 状態管理 ----------------
+let state="title"; // title, select, main, survival, local2p, ranking, result
+let winnerText="";
+
+// ---------------- ランキング保存 ----------------
+const record = JSON.parse(localStorage.getItem("beamRecord")||'{"p1":0,"p2":0,"best":0}');
+function saveRecord(){
+  localStorage.setItem("beamRecord",JSON.stringify(record));
+}
+
+// ---------------- 簡易SE ----------------
+const AC = new (window.AudioContext||window.webkitAudioContext)();
+function playTone(f,d=0.05,t="sine",v=0.1){
+  const o=AC.createOscillator(), g=AC.createGain();
+  o.type=t; o.frequency.value=f;
+  g.gain.value=v;
+  o.connect(g); g.connect(AC.destination);
+  o.start(); o.stop(AC.currentTime+d);
+}
+
+// ---------------- UIボタン ----------------
+function makeBtn(x,y,w,h,label){
+  return {x,y,w,h,label,down:false};
+}
+let buttons={};
+function setupButtons(){
+  const s = Math.min(canvas.width,canvas.height);
+  const base = s*0.12;
+  const leftX = base;
+  const rightX = canvas.width-base*2.2;
+
+  buttons.p1 = {
+    up:makeBtn(leftX,canvas.height-base*3,base,base,"↑"),
+    down:makeBtn(leftX,canvas.height-base,base,base,"↓"),
+    left:makeBtn(leftX-base,canvas.height-base*2,base,base,"←"),
+    right:makeBtn(leftX+base,canvas.height-base*2,base,base,"→"),
+    beam:makeBtn(leftX+base*2.2,canvas.height-base*2,base*1.4,base*1.4,"BEAM")
+  };
+  buttons.p2 = {
+    up:makeBtn(rightX,canvas.height-base*3,base,base,"↑"),
+    down:makeBtn(rightX,canvas.height-base,base,base,"↓"),
+    left:makeBtn(rightX-base,canvas.height-base*2,base,base,"←"),
+    right:makeBtn(rightX+base,canvas.height-base*2,base,base,"→"),
+    beam:makeBtn(rightX-base*2.2,canvas.height-base*2,base*1.4,base*1.4,"BEAM")
+  };
+}
+setupButtons();
+addEventListener("resize",setupButtons);
+
+function drawBtn(b){
+  ctx.strokeStyle="#9ff";
+  ctx.lineWidth=2;
+  ctx.strokeRect(b.x,b.y,b.w,b.h);
+  ctx.fillStyle=b.down?"#9ff":"#000";
+  ctx.globalAlpha=0.15;
+  ctx.fillRect(b.x,b.y,b.w,b.h);
+  ctx.globalAlpha=1;
+  ctx.fillStyle="#9ff";
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+  ctx.font=(b.h*0.4)+"px sans-serif";
+  ctx.fillText(b.label,b.x+b.w/2,b.y+b.h/2);
+}
+
+// ---------------- 入力 ----------------
+const touch = {};
+function hit(b,x,y){return x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;}
+function handle(e,down){
+  const t = e.touches?e.touches:[e];
+  for(const p of t){
+    const x=p.clientX, y=p.clientY;
+    for(const g of [buttons.p1,buttons.p2]){
+      for(const k in g){
+        const b=g[k];
+        if(hit(b,x,y)) b.down=down;
+      }
+    }
+  }
+  e.preventDefault();
+}
+addEventListener("touchstart",e=>handle(e,true),{passive:false});
+addEventListener("touchend",e=>handle(e,false),{passive:false});
+addEventListener("mousedown",e=>handle(e,true));
+addEventListener("mouseup",e=>handle(e,false));
+
+// ---------------- 画面描画 ----------------
+function bg(){
+  ctx.fillStyle="#02040f";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  for(let i=0;i<40;i++){
+    ctx.fillStyle="rgba(120,180,255,0.08)";
+    ctx.fillRect(Math.random()*canvas.width,Math.random()*canvas.height,2,2);
+  }
+}
+
+function drawTitle(){
+  bg();
+  ctx.textAlign="center";
+  ctx.fillStyle="#9ff";
+  ctx.font="48px sans-serif";
+  ctx.fillText("BEAM DUEL",canvas.width/2,canvas.height*0.3);
+  ctx.font="20px sans-serif";
+  ctx.fillText("Neo Fantasia",canvas.width/2,canvas.height*0.38);
+
+  const opts=["メイン(CPU)","サバイバル","ローカル2P","ランキング"];
+  opts.forEach((t,i)=>{
+    ctx.fillStyle="#fff";
+    ctx.fillText(t,canvas.width/2,canvas.height*0.55+i*36);
+  });
+}
+
+function drawRanking(){
+  bg();
+  ctx.textAlign="center";
+  ctx.fillStyle="#fff";
+  ctx.font="28px sans-serif";
+  ctx.fillText("RANKING",canvas.width/2,80);
+  ctx.font="20px sans-serif";
+  ctx.fillText("P1 勝利数: "+record.p1,canvas.width/2,150);
+  ctx.fillText("P2 勝利数: "+record.p2,canvas.width/2,190);
+  ctx.fillText("サバイバル最高: "+record.best,canvas.width/2,230);
+  ctx.font="16px sans-serif";
+  ctx.fillText("タップで戻る",canvas.width/2,canvas.height-60);
+}
+
+addEventListener("click",e=>{
+  if(state==="title"){
+    const y=e.clientY;
+    const base=canvas.height*0.55;
+    if(y<base+30) state="select_main";
+    else if(y<base+66) state="survival";
+    else if(y<base+102) state="local2p";
+    else state="ranking";
+    playTone(600,0.05);
+  }else if(state==="ranking"){
+    state="title";
+  }
+});
+<script>
+// ---------- ゲーム本体 ----------
+let player, cpu, enemy, p2;
+let beams = [];
+let score = 0;
+const MAX_CHARGE = 90;
+
+// 初期化
+function startMain(){
+  player = {x:120,y:canvas.height/2,r:14,hp:100,charge:0,cool:0};
+  cpu = {x:canvas.width-120,y:canvas.height/2,r:14,hp:100,charge:0,cool:0};
+  beams=[];
+}
+function startSurvival(){
+  player = {x:120,y:canvas.height/2,r:14,hp:100,charge:0,cool:0};
+  score=0;
+  spawnEnemy();
+  beams=[];
+}
+function spawnEnemy(){
+  enemy = {x:canvas.width-120,y:canvas.height/2,r:14,hp:40+score*8,charge:0,cool:0};
+}
+function startLocal2P(){
+  player = {x:120,y:canvas.height/2,r:14,hp:100,charge:0,cool:0};
+  p2 = {x:canvas.width-120,y:canvas.height/2,r:14,hp:100,charge:0,cool:0};
+  beams=[];
+}
+
+// 発射
+function fire(from,power){
+  beams.push({
+    x:from.x+(from===player?from.r+2:-from.r-2),
+    y:from.y,
+    vx:(from===player||from===p2?1:-1)*(6+power*0.06),
+    w:3+power*0.08,
+    dmg:4+power*0.25,
+    from
+  });
+  playTone(400+power*4,0.05,"square",0.08);
+}
+
+// 更新
+function updateChar(c,btns){
+  const sp=2.5;
+  if(btns.left.down) c.x-=sp;
+  if(btns.right.down) c.x+=sp;
+  if(btns.up.down) c.y-=sp;
+  if(btns.down.down) c.y+=sp;
+  c.x=Math.max(20,Math.min(canvas.width-20,c.x));
+  c.y=Math.max(20,Math.min(canvas.height-20,c.y));
+  if(c.cool>0) c.cool--;
+  if(btns.beam.down && c.cool<=0){
+    c.charge=Math.min(MAX_CHARGE,c.charge+1);
+  }else if(c.charge>0){
+    fire(c,c.charge);
+    c.cool=10+c.charge*0.1;
+    c.charge=0;
+  }
+}
+
+function updateCPU(){
+  if(cpu.cool>0) cpu.cool--;
+  const dy=player.y-cpu.y;
+  cpu.y+=Math.sign(dy)*1.2;
+  if(cpu.cool<=0) cpu.charge=Math.min(MAX_CHARGE,cpu.charge+1);
+  if(cpu.charge>MAX_CHARGE*0.7){
+    fire(cpu,cpu.charge);
+    cpu.cool=12;
+    cpu.charge=0;
+  }
+}
+
+function updateBeams(targetA,targetB){
+  beams.forEach(b=>b.x+=b.vx);
+  beams=beams.filter(b=>{
+    const t=(b.from===targetA?targetB:targetA);
+    if(Math.hypot(b.x-t.x,b.y-t.y)<t.r){
+      t.hp-=b.dmg;
+      playTone(120,0.05,"sawtooth",0.12);
+      return false;
+    }
+    return b.x>0&&b.x<canvas.width;
+  });
+}
+
+// 描画
+function drawChar(c,color){
+  ctx.shadowBlur=15; ctx.shadowColor=color;
+  ctx.fillStyle=color;
+  ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur=0;
+}
+function drawGame(){
+  bg();
+  drawChar(player,"#7ff");
+  if(state==="main") drawChar(cpu,"#f7f");
+  if(state==="survival") drawChar(enemy,"#f55");
+  if(state==="local2p") drawChar(p2,"#ff7");
+  beams.forEach(b=>{
+    ctx.strokeStyle="#fff";
+    ctx.lineWidth=b.w;
+    ctx.beginPath();
+    ctx.moveTo(b.x,b.y);
+    ctx.lineTo(b.x-b.vx*3,b.y);
+    ctx.stroke();
+  });
+  drawBtn(buttons.p1.up); drawBtn(buttons.p1.down);
+  drawBtn(buttons.p1.left); drawBtn(buttons.p1.right);
+  drawBtn(buttons.p1.beam);
+  if(state==="local2p"){
+    drawBtn(buttons.p2.up); drawBtn(buttons.p2.down);
+    drawBtn(buttons.p2.left); drawBtn(buttons.p2.right);
+    drawBtn(buttons.p2.beam);
+  }
+}
+
+// メインループ
+function loop(){
+  if(state==="title") drawTitle();
+  else if(state==="ranking") drawRanking();
+  else if(state==="main"){
+    if(!player) startMain();
+    updateChar(player,buttons.p1);
+    updateCPU();
+    updateBeams(player,cpu);
+    if(player.hp<=0||cpu.hp<=0){
+      winnerText = player.hp>0?"YOU WIN":"CPU WIN";
+      state="result";
+    }
+    drawGame();
+  }
+  else if(state==="survival"){
+    if(!player) startSurvival();
+    updateChar(player,buttons.p1);
+    updateBeams(player,enemy);
+    if(enemy.hp<=0){ score++; if(score>record.best){record.best=score;saveRecord();} spawnEnemy(); }
+    if(player.hp<=0){ winnerText="GAME OVER"; state="result"; }
+    drawGame();
+  }
+  else if(state==="local2p"){
+    if(!player) startLocal2P();
+    updateChar(player,buttons.p1);
+    updateChar(p2,buttons.p2);
+    updateBeams(player,p2);
+    if(player.hp<=0||p2.hp<=0){
+      if(player.hp>0){record.p1++; winnerText="P1 WIN";}
+      else {record.p2++; winnerText="P2 WIN";}
+      saveRecord();
+      state="result";
+    }
+    drawGame();
+  }
+  else if(state==="result"){
+    bg();
+    ctx.textAlign="center";
+    ctx.fillStyle="#fff";
+    ctx.font="32px sans-serif";
+    ctx.fillText(winnerText,canvas.width/2,canvas.height/2);
+    ctx.font="16px sans-serif";
+    ctx.fillText("タップで戻る",canvas.width/2,canvas.height/2+40);
+  }
+  requestAnimationFrame(loop);
+}
+
+addEventListener("click",()=>{
+  if(state==="result"){
+    player=cpu=enemy=p2=null;
+    state="title";
+  }
+});
+
+loop();
+</script>
+</body>
+</html>
